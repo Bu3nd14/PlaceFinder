@@ -136,7 +136,7 @@ final class OpenWebUIService: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
-        request.setValue("places.displayName,places.formattedAddress,places.rating", forHTTPHeaderField: "X-Goog-FieldMask")
+        request.setValue("places.id,places.displayName,places.formattedAddress,places.rating", forHTTPHeaderField: "X-Goog-FieldMask")
         request.setValue("RC.PlaceFinder", forHTTPHeaderField: "X-Ios-Bundle-Identifier")
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
@@ -161,11 +161,15 @@ final class OpenWebUIService: ObservableObject {
         var markdown = "### Luoghi nelle vicinanze per: \(category)\n\n"
 
         for (index, place) in topPlaces.enumerated() {
+            let placeID = (place["id"] as? String) ?? ""
             let displayName = (place["displayName"] as? [String: Any])?["text"] as? String ?? "Sconosciuto"
             let address = (place["formattedAddress"] as? String) ?? ""
             let rating = place["rating"] as? Double
 
             markdown += "**\(index + 1). \(displayName)**\n"
+            if !placeID.isEmpty {
+                markdown += "- Place ID: \(placeID)\n"
+            }
             if !address.isEmpty {
                 markdown += "- Indirizzo: \(address)\n"
             }
@@ -218,10 +222,16 @@ final class OpenWebUIService: ObservableObject {
             Sei un concierge locale esperto. L'utente sta cercando la categoria '\(autoSearchCategory!)' \
             raggiungibile '\(autoSearchTransit!)'. RISPONDI ESCLUSIVAMENTE NELLA LINGUA: \(language).
             Basandoti SOLO sulla lista reale di Google, seleziona un MASSIMO DI 3 LOCALI reali. \
-            Sii ESTREMAMENTE SINTETICO. Fornisci solo il nome del locale in grassetto, il punteggio, \
-            l'indirizzo e una singola frase di descrizione fulminea (massimo 15 parole per locale). \
-            Elimina qualsiasi introduzione o conclusione, vai dritto ai locali. \
-            Ecco i dati di Google:
+            Sii ESTREMAMENTE SINTETICO. Per ogni locale, il nome DEVE essere un link cliccabile \
+            markdown usando esattamente il nome e il Place ID forniti nei dati, con questa \
+            struttura URL OBBLIGATORIA (non inventare altri formati): \
+            [**NOME_LOCALE**](https://www.google.com/maps/search/?api=1&query=NOME_URL_ENCODED&query_place_id=PLACE_ID). \
+            IMPORTANTE: sostituisci NOME_URL_ENCODED con il nome del locale sostituendo gli \
+            spazi con il segno + (esempio: Garden+Cafe). PLACE_ID deve essere il valore \
+            esatto del campo Place ID riportato nei dati.
+            Sotto il link, mostra il punteggio, l'indirizzo e una singola frase di descrizione \
+            fulminea (massimo 15 parole per locale). Elimina qualsiasi introduzione o conclusione, \
+            vai dritto ai locali. Ecco i dati di Google con i rispettivi Place ID:
 
             \(context)
             """
