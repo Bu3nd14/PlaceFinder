@@ -97,6 +97,7 @@ final class OpenWebUIService: ObservableObject {
         }
 
         jwtToken = token
+        isLoggedIn = true
         return token
     }
 
@@ -182,22 +183,50 @@ final class OpenWebUIService: ObservableObject {
         return markdown
     }
 
-    // MARK: - Chat Completion (Streaming)
+    // MARK: - Available Models
 
-    /// Sends a chat completion request to the server with streaming enabled.
+    /// Fetches the list of available model IDs from the LiteLLM proxy's `/api/models`
+    /// endpoint. Returns model IDs sorted alphabetically for the Picker dropdown.
+    func fetchAvailableModels() async throws -> [String] {
+        guard !baseURL.isEmpty else { throw ServiceError.missingBaseURL }
+        guard let token = jwtToken else { throw ServiceError.notAuthenticated }
+
+        let urlString = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/models"
+        guard let url = URL(string: urlString) else { throw ServiceError.invalidURL }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw ServiceError.chatCompletionFailed
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["data"] as? [[String: Any]] else {
+            return []
+        }
+
+        return models.compactMap { $0["id"] as? String }.sorted()
+    }
+
+    // MARK: - Chat Completion
+
+    /// Sends a chat completion request to the server.
     ///
-    /// When `autoSearchCategory` and `autoSearchTransit` are provided alongside
-    /// `googlePlacesContext`, a strict hidden concierge system prompt is assembled
-    /// that instructs the LLM to select and describe ONLY the top 3 venues from
-    /// the real Google data. The user-visible `messages` are omitted from the
-    /// payload in this mode so the chat UI stays clean.
+    /// When `googlePlacesContext` is provided, a concierge system prompt is injected
+    /// that instructs the LLM to select and describe ONLY the top 5 venues from
+    /// the real Google data, with clickable Google Maps links. Streaming is used.
+    ///
+    /// Without `googlePlacesContext`, this falls back to normal non-streaming chat
+    /// with web search tools available.
     func sendChatCompletion(
         model: String,
         messages: [ChatMessage],
         googlePlacesContext: String?,
-        autoSearchCategory: String? = nil,
-        autoSearchTransit: String? = nil,
-        autoSearchLanguage: String? = nil
+        language: String? = nil
     ) async throws -> AsyncThrowingStream<String, Error> {
         guard let token = jwtToken else {
             throw ServiceError.notAuthenticated
@@ -212,16 +241,14 @@ final class OpenWebUIService: ObservableObject {
         }
 
         var payloadMessages: [[String: Any]] = []
+        let hasPlaces = googlePlacesContext != nil && !googlePlacesContext!.isEmpty
 
-        let isAutoSearch = (autoSearchCategory != nil && autoSearchTransit != nil)
-
-        if isAutoSearch, let context = googlePlacesContext, !context.isEmpty {
-            // ── Hidden concierge prompt with embedded Google data ──
-            let language = (autoSearchLanguage == "EN") ? "Inglese" : "Italiano"
+        if hasPlaces {
+            // ── Concierge prompt with Google Places data (top 5, streaming) ──
+            let lang = (language == "EN") ? "English" : "Italian"
             let strictSystemPrompt = """
-            Sei un concierge locale esperto. L'utente sta cercando la categoria '\(autoSearchCategory!)' \
-            raggiungibile '\(autoSearchTransit!)'. RISPONDI ESCLUSIVAMENTE NELLA LINGUA: \(language).
-            Basandoti SOLO sulla lista reale di Google, seleziona un MASSIMO DI 3 LOCALI reali. \
+            Sei un concierge locale esperto. ANSWER ONLY IN: \(lang).
+            Basandoti SOLO sulla lista reale di Google, seleziona un MASSIMO DI 5 LOCALI reali. \
             Sii ESTREMAMENTE SINTETICO. Per ogni locale, il nome DEVE essere un link cliccabile \
             markdown usando esattamente il nome e il Place ID forniti nei dati, con questa \
             struttura URL OBBLIGATORIA (non inventare altri formati): \
@@ -233,22 +260,14 @@ final class OpenWebUIService: ObservableObject {
             fulminea (massimo 15 parole per locale). Elimina qualsiasi introduzione o conclusione, \
             vai dritto ai locali. Ecco i dati di Google con i rispettivi Place ID:
 
-            \(context)
+            \(googlePlacesContext!)
             """
             payloadMessages.append([
                 "role": "system",
                 "content": strictSystemPrompt
             ])
-            // No user-visible messages injected — UI stays clean
         } else {
-            // Standard chat path: inject Google Places as a gentle system prefix, then user messages
-            if let context = googlePlacesContext, !context.isEmpty {
-                payloadMessages.append([
-                    "role": "system",
-                    "content": "Sei un assistente utile. Ecco i luoghi trovati nelle vicinanze:\n\n\(context)"
-                ])
-            }
-
+            // Normal chat: inject user messages
             for msg in messages {
                 payloadMessages.append([
                     "role": msg.role.rawValue,
@@ -257,11 +276,35 @@ final class OpenWebUIService: ObservableObject {
             }
         }
 
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "model": model,
             "messages": payloadMessages,
-            "stream": true
+            "stream": hasPlaces
         ]
+
+        // For normal chat (non-streaming), inject web search tool definition
+        if !hasPlaces {
+            payload["tools"] = [
+                [
+                    "type": "function",
+                    "function": [
+                        "name": "litellm_web_search",
+                        "description": "Search the web for real-time information",
+                        "parameters": [
+                            "type": "object",
+                            "properties": [
+                                "query": [
+                                    "type": "string",
+                                    "description": "Search query"
+                                ]
+                            ],
+                            "required": ["query"]
+                        ]
+                    ]
+                ]
+            ]
+            payload["tool_choice"] = "auto"
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -269,39 +312,133 @@ final class OpenWebUIService: ObservableObject {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (streamData, response) = try await session.bytes(for: request)
+        if hasPlaces {
+            // ── Streaming path (concierge with Places) ──
+            let (streamData, response) = try await session.bytes(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            throw ServiceError.chatCompletionFailed
-        }
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                throw ServiceError.chatCompletionFailed
+            }
 
-        return AsyncThrowingStream<String, Error> { continuation in
-            Task {
-                var buffer = ""
-                for try await line in streamData.lines {
-                    guard line.hasPrefix("data: ") else { continue }
-                    let jsonString = String(line.dropFirst(6))
+            return AsyncThrowingStream<String, Error> { continuation in
+                Task {
+                    for try await line in streamData.lines {
+                        guard line.hasPrefix("data: ") else { continue }
+                        let jsonString = String(line.dropFirst(6))
 
-                    if jsonString == "[DONE]" {
-                        continuation.finish()
-                        return
+                        if jsonString == "[DONE]" {
+                            continuation.finish()
+                            return
+                        }
+
+                        guard let data = jsonString.data(using: .utf8),
+                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              let choices = json["choices"] as? [[String: Any]],
+                              let firstChoice = choices.first,
+                              let delta = firstChoice["delta"] as? [String: Any],
+                              let content = delta["content"] as? String else {
+                            continue
+                        }
+
+                        continuation.yield(content)
                     }
+                    continuation.finish()
+                }
+            }
+        } else {
+            // ── Non-streaming path (normal chat with web search tools) ──
+            let (data, response) = try await session.data(for: request)
 
-                    guard let data = jsonString.data(using: .utf8),
-                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          let choices = json["choices"] as? [[String: Any]],
-                          let firstChoice = choices.first,
-                          let delta = firstChoice["delta"] as? [String: Any],
-                          let content = delta["content"] as? String else {
-                        continue
-                    }
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                throw ServiceError.chatCompletionFailed
+            }
 
+            let content = parseNonStreamingResponse(data)
+
+            return AsyncThrowingStream<String, Error> { continuation in
+                if !content.isEmpty {
                     continuation.yield(content)
                 }
                 continuation.finish()
             }
         }
+    }
+
+    // MARK: - Intent Detection
+
+    /// Queries the LLM to determine whether the user's message is asking to find/search
+    /// for places/venues/locations. Returns the extracted search query if YES, nil if NO.
+    func detectPlaceSearchIntent(userMessage: String) async -> String? {
+        guard let token = jwtToken, !baseURL.isEmpty else { return nil }
+
+        let urlString = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/chat/completions"
+        guard let url = URL(string: urlString) else { return nil }
+
+        let detectionPrompt = """
+        Does this user message ask to find or search for places, venues, locations, shops, restaurants, bars, or other physical establishments? Reply EXACTLY with one of these two formats (nothing else):
+
+        YES|<search query>
+        NO
+
+        Examples:
+        "trova pizzerie" → YES|pizzerie
+        "mi consigli un buon sushi a Milano?" → YES|sushi Milano
+        "che tempo fa domani?" → NO
+        "cosa ne pensi dei ristoranti stellati?" → NO
+        "come stai?" → NO
+        "cerco un bar vicino" → YES|bar vicino
+        "hotel economici a Roma" → YES|hotel economici Roma
+
+        Message: "\(userMessage)"
+        """
+
+        let messages: [[String: Any]] = [
+            ["role": "user", "content": detectionPrompt]
+        ]
+
+        let payload: [String: Any] = [
+            "model": "deepseek-v4-pro",
+            "messages": messages,
+            "stream": false
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                return nil
+            }
+            let content = parseNonStreamingResponse(data).trimmingCharacters(in: .whitespacesAndNewlines)
+            if content.hasPrefix("YES|") {
+                let query = String(content.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                return query.isEmpty ? nil : query
+            }
+            return nil
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Extracts the content string from a non-streaming chat completion JSON response.
+    private func parseNonStreamingResponse(_ data: Data) -> String {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            return ""
+        }
+        return content
     }
 }
 
