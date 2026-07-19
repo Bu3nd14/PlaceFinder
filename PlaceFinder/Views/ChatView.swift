@@ -5,6 +5,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 // MARK: - ChatView
 
@@ -35,13 +36,16 @@ struct ChatView: View {
     @State private var mumblingMessageID: UUID?
     @State private var mumblingOpacity: Double = 0.4
     @State private var pulsingTask: Task<Void, Never>?
+    @State private var currentStreamTask: Task<Void, Never>?
     @FocusState private var inputFocus: Bool
 
     // MARK: - Error & Clipboard State
 
     @State private var showError = false
     @State private var errorMessage: String = ""
+    @State private var isManuallyCancelling = false
     @State private var showCopiedToast = false
+
     @State private var failedMessageIDs: Set<UUID> = []
     @State private var retryOffsets: [UUID: CGFloat] = [:]
     @State private var currentSuggestions: [Suggestion] = []
@@ -195,7 +199,6 @@ struct ChatView: View {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.subheadline)
                 }
-                .disabled(messages.isEmpty && !isStreaming)
             }
         }
         .toolbarBackground(Color.cyan.opacity(0.15), for: .navigationBar)
@@ -429,15 +432,25 @@ struct ChatView: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
                 .onSubmit { sendMessage() }
 
-            Button {
-                sendMessage()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundColor(currentInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .blue)
+            if isStreaming {
+                Button {
+                    cancelStreaming()
+                } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.title2)
+                        .foregroundColor(.red)
+                }
+            } else {
+                Button {
+                    sendMessage()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundColor(currentInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .blue)
+                }
+                .disabled(currentInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .disabled(currentInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isStreaming)
         }
     }
 
@@ -466,45 +479,100 @@ struct ChatView: View {
         let model = selectedModel
         let transit = selectedTransit
 
-        Task {
+        currentStreamTask = Task {
             var accumulated = ""
+
+            // Begin background task so the request survives ~30 s after the app loses focus
+            var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+            backgroundTaskID = await UIApplication.shared.beginBackgroundTask(withName: "PlaceFinder.chat") {
+                // Expiration handler – cancel the task if the system is about to kill us
+                UIApplication.shared.endBackgroundTask(backgroundTaskID)
+                backgroundTaskID = .invalid
+            }
 
             do {
                 // 1) Run intent detection to decide whether to call Places
                 // 2) If intent detected, call Places and use concierge streaming prompt
                 let placesContext: String?
                 if let detectedQuery = await service.detectPlaceSearchIntent(userMessage: trimmed) {
-                    placesContext = try? await service.searchNearbyPlaces(category: detectedQuery, transitType: transit)
+                    if let result = try? await service.searchNearbyPlaces(category: detectedQuery, transitType: transit) {
+                        placesContext = result.markdown
+                    } else {
+                        placesContext = nil
+                    }
                 } else {
                     placesContext = nil
                 }
 
+                // Append location context when coordinates are available
+                let locationContext: OpenWebUIService.LocationContext? = {
+                    guard let lat = locationManager.currentLatitude,
+                          let lon = locationManager.currentLongitude else { return nil }
+                    let formatter = ISO8601DateFormatter()
+                    formatter.timeZone = TimeZone.current
+                    formatter.formatOptions = [.withInternetDateTime, .withTimeZone]
+                    return OpenWebUIService.LocationContext(
+                        latitude: lat,
+                        longitude: lon,
+                        timestamp: formatter.string(from: Date())
+                    )
+                }()
                 let stream = try await service.sendChatCompletion(
                     model: model,
                     messages: messages,
                     googlePlacesContext: placesContext,
-                    language: selectedLanguage
+                    language: selectedLanguage,
+                    locationContext: locationContext
                 )
 
-                var lastUpdate = Date()
-                for try await chunk in stream {
-                    accumulated += chunk
-                    let now = Date()
-                    if now.timeIntervalSince(lastUpdate) > 0.05 {
-                        let snapshot = accumulated
-                        await MainActor.run { streamedAssistantContent = snapshot }
-                        lastUpdate = now
+                let streamTask = Task {
+                    var lastUpdate = Date()
+                    for try await chunk in stream {
+                        try Task.checkCancellation()
+                        accumulated += chunk
+                        let now = Date()
+                        if now.timeIntervalSince(lastUpdate) > 0.05 {
+                            let snapshot = accumulated
+                            await MainActor.run { streamedAssistantContent = snapshot }
+                            lastUpdate = now
+                        }
                     }
+                    await MainActor.run { streamedAssistantContent = accumulated }
                 }
-                await MainActor.run { streamedAssistantContent = accumulated }
+
+                let timeoutTask = Task {
+                    try await Task.sleep(nanoseconds: 90 * 1_000_000_000)
+                    streamTask.cancel()
+                }
+
+                // Wait for the stream to finish; the first to finish determines the outcome
+                _ = await streamTask.result
+                timeoutTask.cancel()
             } catch {
-                await MainActor.run {
-                    errorMessage = "Chat fallita: \(error.localizedDescription)"
-                    showError = true
+                if await MainActor.run(body: { isManuallyCancelling }) {
+                    // User pressed Stop or Reset — no alert
+                    await MainActor.run { isManuallyCancelling = false }
+                } else if error is CancellationError {
+                    // Timed out
                     if accumulated.isEmpty {
-                        failedMessageIDs.insert(userMsgID)
+                        accumulated = selectedLanguage == "EN"
+                            ? "Response timed out. Please try again."
+                            : "Risposta scaduta. Riprova."
+                    }
+                } else {
+                    await MainActor.run {
+                        errorMessage = "Chat fallita: \(error.localizedDescription)"
+                        showError = true
+                        if accumulated.isEmpty {
+                            failedMessageIDs.insert(userMsgID)
+                        }
                     }
                 }
+            }
+
+            // End the background task
+            if backgroundTaskID != .invalid {
+                await UIApplication.shared.endBackgroundTask(backgroundTaskID)
             }
 
             await MainActor.run {
@@ -516,6 +584,7 @@ struct ChatView: View {
                 }
                 streamedAssistantContent = ""
                 isStreaming = false
+                currentStreamTask = nil
             }
         }
     }
@@ -574,13 +643,31 @@ struct ChatView: View {
     }
 
     private func resetChat() {
-        guard !isStreaming else { return }
+        isManuallyCancelling = true
+        currentStreamTask?.cancel()
+        currentStreamTask = nil
+        stopPulsing()
         withAnimation(.easeInOut(duration: 0.25)) {
             messages.removeAll()
             streamedAssistantContent = ""
             failedMessageIDs.removeAll()
             retryOffsets.removeAll()
+            mumblingMessageID = nil
+            isStreaming = false
             refreshSuggestions()
+        }
+    }
+
+    private func cancelStreaming() {
+        isManuallyCancelling = true
+        currentStreamTask?.cancel()
+        currentStreamTask = nil
+        stopPulsing()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            messages.removeAll { $0.id == mumblingMessageID }
+            mumblingMessageID = nil
+            isStreaming = false
+            streamedAssistantContent = ""
         }
     }
 

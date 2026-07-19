@@ -103,16 +103,17 @@ final class OpenWebUIService: ObservableObject {
 
     // MARK: - Google Places Nearby Search
 
-    /// Searches nearby places using the Google Places API (New) and returns a formatted
-    /// raw markdown summary string ready to be appended into the LLM message context.
-    func searchNearbyPlaces(category: String, transitType: TransitType) async throws -> String {
+    /// Searches nearby places using the Google Places API (New).
+    /// Uses `locationBias` for ranking by distance while still returning results beyond the radius.
+    ///
+    /// - Returns: A `PlacesSearchResult` containing the markdown summary.
+    func searchNearbyPlaces(category: String, transitType: TransitType) async throws -> PlacesSearchResult {
         let apiKey = googleAPIKey
         guard !apiKey.isEmpty else {
             throw ServiceError.missingGoogleAPIKey
         }
 
         let (latitude, longitude) = try await LocationManager.shared.fetchCurrentCoordinates()
-
         let radius = transitType.radiusInMeters
 
         guard let url = URL(string: "https://places.googleapis.com/v1/places:searchText") else {
@@ -148,12 +149,15 @@ final class OpenWebUIService: ObservableObject {
             throw ServiceError.googlePlacesRequestFailed
         }
 
-        return parseGooglePlacesResponse(data: data, category: category)
+        let markdown = parseGooglePlacesResponse(data: data, category: category)
+        return PlacesSearchResult(markdown: markdown, isFallback: false)
     }
 
+    /// Parses the raw Places API JSON response into markdown.
     private func parseGooglePlacesResponse(data: Data, category: String) -> String {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let places = json["places"] as? [[String: Any]] else {
+              let places = json["places"] as? [[String: Any]],
+              !places.isEmpty else {
             return "Nessun luogo trovato per la categoria \"\(category)\"."
         }
 
@@ -214,6 +218,13 @@ final class OpenWebUIService: ObservableObject {
 
     // MARK: - Chat Completion
 
+    /// Context about the user's current location and time, injected into every request.
+    struct LocationContext {
+        let latitude: Double
+        let longitude: Double
+        let timestamp: String
+    }
+
     /// Sends a chat completion request to the server.
     ///
     /// When `googlePlacesContext` is provided, a concierge system prompt is injected
@@ -222,11 +233,15 @@ final class OpenWebUIService: ObservableObject {
     ///
     /// Without `googlePlacesContext`, this falls back to normal non-streaming chat
     /// with web search tools available.
+    ///
+    /// `locationContext` is injected as a system message so the LLM always knows
+    /// the user's current position and time.
     func sendChatCompletion(
         model: String,
         messages: [ChatMessage],
         googlePlacesContext: String?,
-        language: String? = nil
+        language: String? = nil,
+        locationContext: LocationContext? = nil
     ) async throws -> AsyncThrowingStream<String, Error> {
         guard let token = jwtToken else {
             throw ServiceError.notAuthenticated
@@ -242,6 +257,14 @@ final class OpenWebUIService: ObservableObject {
 
         var payloadMessages: [[String: Any]] = []
         let hasPlaces = googlePlacesContext != nil && !googlePlacesContext!.isEmpty
+
+        // ── Build location context string ──
+        let locationInfo: String
+        if let ctx = locationContext {
+            locationInfo = "Current time: \(ctx.timestamp). User location: lat \(String(format: "%.6f", ctx.latitude)), lon \(String(format: "%.6f", ctx.longitude))."
+        } else {
+            locationInfo = ""
+        }
 
         if hasPlaces {
             // ── Concierge prompt with Google Places data (top 5, streaming) ──
@@ -261,13 +284,21 @@ final class OpenWebUIService: ObservableObject {
             vai dritto ai locali. Ecco i dati di Google con i rispettivi Place ID:
 
             \(googlePlacesContext!)
+
+            \(locationInfo)
             """
             payloadMessages.append([
                 "role": "system",
                 "content": strictSystemPrompt
             ])
         } else {
-            // Normal chat: inject user messages
+            // Normal chat: inject location context as system message, then user messages
+            if !locationInfo.isEmpty {
+                payloadMessages.append([
+                    "role": "system",
+                    "content": locationInfo
+                ])
+            }
             for msg in messages {
                 payloadMessages.append([
                     "role": msg.role.rawValue,
@@ -460,6 +491,12 @@ enum MessageRole: String, Codable {
     case system
     case user
     case assistant
+}
+
+/// Result of a Google Places nearby search.
+struct PlacesSearchResult {
+    let markdown: String
+    let isFallback: Bool
 }
 
 enum ServiceError: LocalizedError {
