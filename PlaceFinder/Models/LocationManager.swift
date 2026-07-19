@@ -34,6 +34,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var locationError: String?
 
     private var continuation: CheckedContinuation<(Double, Double), Error>?
+    private var lastFixTimestamp: Date?
 
     private override init() {
         super.init()
@@ -62,14 +63,25 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             throw LocationError.unknown
         }
 
-        // If we already have a recent cached coordinate, return it
-        if let lat = currentLatitude, let lon = currentLongitude {
+        // If we have a fix fresher than 60s, return cached coordinates immediately
+        if let lat = currentLatitude, let lon = currentLongitude,
+           let ts = lastFixTimestamp, Date().timeIntervalSince(ts) < 60 {
             return (lat, lon)
         }
 
-        return try await withCheckedThrowingContinuation { cont in
-            self.continuation = cont
-            manager.requestLocation()
+        // Cached data is stale or absent: request a fresh single-shot location
+        do {
+            let result = try await withCheckedThrowingContinuation { cont in
+                self.continuation = cont
+                manager.requestLocation()
+            }
+            return result
+        } catch {
+            // GPS failed but we have old coordinates (even if stale): return them as fallback
+            if let lat = currentLatitude, let lon = currentLongitude {
+                return (lat, lon)
+            }
+            throw error
         }
     }
 
@@ -83,6 +95,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         guard let location = locations.last else { return }
         currentLatitude = location.coordinate.latitude
         currentLongitude = location.coordinate.longitude
+        lastFixTimestamp = Date()
         locationError = nil
 
         if let continuation = continuation {
