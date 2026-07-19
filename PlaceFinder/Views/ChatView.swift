@@ -27,6 +27,7 @@ struct ChatView: View {
     @State private var selectedModel: String = "gpt-places"
     @State private var selectedTransit: TransitType = .walking
     @State private var selectedLanguage: String = "IT"
+    @StateObject private var strings = AppStrings.shared
 
     // MARK: - Chat State
 
@@ -208,10 +209,11 @@ struct ChatView: View {
             refreshSuggestions()
             Task { await reloadAvailableModels() }
         }
-        .onChange(of: selectedLanguage) { _ in
+        .onChange(of: selectedLanguage) { newLang in
+            strings.language = newLang
             refreshSuggestions()
         }
-        .alert("Errore", isPresented: $showError) {
+        .alert(strings.errorTitle, isPresented: $showError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage)
@@ -269,9 +271,9 @@ struct ChatView: View {
 
                 // Row: Transit + Language
                 HStack(spacing: 12) {
-                    Picker("Mezzo", selection: $selectedTransit) {
-                        Text("A piedi").tag(TransitType.walking)
-                        Text("In auto").tag(TransitType.driving)
+                    Picker(strings.modePickerLabel, selection: $selectedTransit) {
+                        Text(strings.walkingLabel).tag(TransitType.walking)
+                        Text(strings.drivingLabel).tag(TransitType.driving)
                     }
                     .pickerStyle(.segmented)
                     .scaleEffect(0.85)
@@ -282,7 +284,7 @@ struct ChatView: View {
                         Image(systemName: "globe")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Picker("Lingua", selection: $selectedLanguage) {
+                        Picker(strings.languagePickerLabel, selection: $selectedLanguage) {
                             Text("IT").tag("IT")
                             Text("EN").tag("EN")
                         }
@@ -297,7 +299,7 @@ struct ChatView: View {
     }
 
     private var shortConfigLabel: String {
-        let transitText = selectedTransit == .walking ? "A piedi" : "In auto"
+        let transitText = selectedTransit == .walking ? strings.walkingLabel : strings.drivingLabel
         return "🧠 \(selectedModel.components(separatedBy: "-").first ?? selectedModel) · \(transitText) · \(selectedLanguage)"
     }
 
@@ -306,9 +308,9 @@ struct ChatView: View {
     private var welcomeView: some View {
         VStack(spacing: 16) {
             Spacer().frame(height: 40)
-            Text("👋 Cosa vuoi cercare?")
+            Text(strings.welcomeTitle)
                 .font(.title3.weight(.semibold))
-            Text("Tocca un suggerimento o scrivi liberamente")
+            Text(strings.welcomeSubtitle)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 
@@ -369,7 +371,7 @@ struct ChatView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.caption2)
-                                Text("Riprova")
+                                Text(strings.retryButton)
                                     .font(.caption2)
                             }
                             .foregroundColor(.red)
@@ -384,7 +386,7 @@ struct ChatView: View {
                         Button {
                             copyToClipboard(msg.content)
                         } label: {
-                            Label("Copia", systemImage: "doc.on.doc")
+                            Label(strings.copyButton, systemImage: "doc.on.doc")
                         }
                     }
                 }
@@ -425,7 +427,7 @@ struct ChatView: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            TextField("Chiedi qualsiasi cosa...", text: $currentInput, axis: .vertical)
+            TextField(strings.inputPlaceholder, text: $currentInput, axis: .vertical)
                 .focused($inputFocus)
                 .lineLimit(1...6)
                 .padding(.horizontal, 12)
@@ -584,7 +586,7 @@ struct ChatView: View {
                     }
                 } else {
                     await MainActor.run {
-                        errorMessage = "Chat fallita: \(error.localizedDescription)"
+                        errorMessage = strings.chatFailedPrefix + error.localizedDescription
                         showError = true
                         if accumulated.isEmpty {
                             failedMessageIDs.insert(userMsgID)

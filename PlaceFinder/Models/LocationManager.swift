@@ -120,9 +120,9 @@ enum LocationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .permissionDenied:
-            return "Accesso alla posizione negato. Abilitalo nelle Impostazioni."
+            return AppStrings.shared.permissionDeniedError
         case .unknown:
-            return "Errore sconosciuto nel recupero della posizione."
+            return AppStrings.shared.unknownLocationError
         }
     }
 }

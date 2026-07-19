@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selectedTab: Int = 0
+    @StateObject private var strings = AppStrings.shared
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -26,7 +27,7 @@ struct ContentView: View {
                 SettingsView()
             }
             .tabItem {
-                Label("Impostazioni", systemImage: selectedTab == 1
+                Label(strings.settingsTab, systemImage: selectedTab == 1
                       ? "gearshape.fill"
                       : "gearshape")
             }

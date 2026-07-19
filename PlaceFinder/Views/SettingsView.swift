@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @StateObject private var service = OpenWebUIService.shared
+    @StateObject private var strings = AppStrings.shared
 
     @State private var baseURL: String = ""
     @State private var userEmail: String = ""
@@ -24,7 +25,7 @@ struct SettingsView: View {
             // MARK: Server Section
             Section {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Server", systemImage: "server.rack")
+                    Label(strings.connectionSection, systemImage: "server.rack")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.blue)
                     Text("URL del server LiteLLM proxy")
@@ -50,7 +51,7 @@ struct SettingsView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark.shield.fill")
                             .foregroundColor(.green)
-                        Text("Connesso")
+                        Text(strings.connectedBadge)
                             .font(.caption.weight(.medium))
                             .foregroundColor(.green)
                     }
@@ -65,7 +66,7 @@ struct SettingsView: View {
                                 .scaleEffect(0.8)
                                 .tint(.white)
                         }
-                        Text("Login")
+                        Text(strings.connectButton)
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
@@ -104,17 +105,17 @@ struct SettingsView: View {
             // MARK: Google Places Section
             Section {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Google Places API", systemImage: "map.fill")
+                    Label(strings.googlePlacesSection, systemImage: "map.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.green)
-                    Text("Chiave per ricercare luoghi nelle vicinanze")
+                    Text(strings.googleAPIHint)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
                 .listRowBackground(Color.clear)
 
-                SecureField("Google API Key", text: $googleAPIKey)
+                SecureField(strings.googleAPIKeyPlaceholder, text: $googleAPIKey)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
 
@@ -133,12 +134,12 @@ struct SettingsView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
                 .listRowBackground(Color.clear)
 
-                Text("PlaceFinder utilizza l'API Google Places per cercare luoghi vicino alla tua posizione e un LLM per fornire raccomandazioni personalizzate.")
+                Text(strings.infoText)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
         }
-        .navigationTitle("Impostazioni")
+        .navigationTitle(strings.settingsTab)
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -183,7 +184,7 @@ struct SettingsView: View {
 
         do {
             let token = try await service.loginToServer()
-            loginStatus = "Login riuscito. Token: \(String(token.prefix(20)))..."
+            loginStatus = strings.loginSuccessPrefix + String(token.prefix(20)) + "..."
             loginSuccess = true
             isAuthenticated = true
         } catch {

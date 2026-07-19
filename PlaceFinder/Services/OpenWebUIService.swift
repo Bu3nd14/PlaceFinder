@@ -155,19 +155,23 @@ final class OpenWebUIService: ObservableObject {
 
     /// Parses the raw Places API JSON response into markdown.
     private func parseGooglePlacesResponse(data: Data, category: String) -> String {
+        let s = AppStrings.shared
+
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let places = json["places"] as? [[String: Any]],
               !places.isEmpty else {
-            return "Nessun luogo trovato per la categoria \"\(category)\"."
+            let template = s.noPlacesFound
+            return template.replacingOccurrences(of: "%{category}", with: category)
         }
 
         let topPlaces = places.prefix(10)
 
-        var markdown = "### Luoghi nelle vicinanze per: \(category)\n\n"
+        let titleTemplate = s.placesNearbyTitle
+        var markdown = titleTemplate.replacingOccurrences(of: "%{category}", with: category) + "\n\n"
 
         for (index, place) in topPlaces.enumerated() {
             let placeID = (place["id"] as? String) ?? ""
-            let displayName = (place["displayName"] as? [String: Any])?["text"] as? String ?? "Sconosciuto"
+            let displayName = (place["displayName"] as? [String: Any])?["text"] as? String ?? s.unknownPlaceName
             let address = (place["formattedAddress"] as? String) ?? ""
             let rating = place["rating"] as? Double
 
@@ -176,10 +180,10 @@ final class OpenWebUIService: ObservableObject {
                 markdown += "- Place ID: \(placeID)\n"
             }
             if !address.isEmpty {
-                markdown += "- Indirizzo: \(address)\n"
+                markdown += s.addressLabel + address + "\n"
             }
             if let rating = rating {
-                markdown += "- Valutazione: \(String(format: "%.1f / 5.0", rating))\n"
+                markdown += s.ratingLabel + String(format: "%.1f / 5.0", rating) + "\n"
             }
             markdown += "\n"
         }
@@ -521,25 +525,26 @@ enum ServiceError: LocalizedError {
     case chatCompletionFailed
 
     var errorDescription: String? {
+        let s = AppStrings.shared
         switch self {
         case .missingBaseURL:
-            return "Base URL non configurato. Vai nelle Impostazioni."
+            return s.missingBaseURL
         case .missingCredentials:
-            return "Email o password non configurati. Vai nelle Impostazioni."
+            return s.missingCredentials
         case .invalidURL:
-            return "URL non valido."
+            return s.invalidURL
         case .loginFailed:
-            return "Login fallito. Verifica le credenziali."
+            return s.loginFailed
         case .invalidTokenResponse:
-            return "Risposta di login non valida: token JWT mancante."
+            return s.invalidTokenResponse
         case .missingGoogleAPIKey:
-            return "Google Places API Key non configurata. Vai nelle Impostazioni."
+            return s.missingGoogleAPIKey
         case .googlePlacesRequestFailed:
-            return "Richiesta a Google Places fallita."
+            return s.googlePlacesRequestFailed
         case .notAuthenticated:
-            return "Non autenticato. Effettua il login prima di inviare messaggi."
+            return s.notAuthenticated
         case .chatCompletionFailed:
-            return "Richiesta di chat fallita."
+            return s.chatCompletionFailed
         }
     }
 }
