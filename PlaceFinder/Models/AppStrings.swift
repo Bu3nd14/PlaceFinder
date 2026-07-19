@@ -37,12 +37,14 @@ final class AppStrings: ObservableObject {
     // MARK: - SettingsView
 
     var connectionSection: String { language == "EN" ? "Connection" : "Connessione" }
+    var connectionSubtitle: String { language == "EN" ? "OpenWebUI server URL" : "URL del server OpenWebUI" }
     var connectButton: String { language == "EN" ? "Connect" : "Connetti" }
     var connectedBadge: String { language == "EN" ? "Connected ✓" : "Connesso ✓" }
     var loginSuccessPrefix: String { language == "EN" ? "Login successful. Token: " : "Login riuscito. Token: " }
     var googlePlacesSection: String { language == "EN" ? "Google Places API" : "Google Places API" }
     var googleAPIHint: String { language == "EN" ? "Key to search nearby places" : "Chiave per ricercare luoghi nelle vicinanze" }
     var googleAPIKeyPlaceholder: String { language == "EN" ? "Google API Key" : "Google API Key" }
+    var infoSection: String { language == "EN" ? "Information" : "Informazioni" }
     var infoText: String {
         language == "EN"
             ? "PlaceFinder uses the Google Places API to search for places near your location and an LLM to provide personalized recommendations."

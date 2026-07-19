@@ -28,7 +28,7 @@ struct SettingsView: View {
                     Label(strings.connectionSection, systemImage: "server.rack")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.blue)
-                    Text("URL del server LiteLLM proxy")
+                    Text(strings.connectionSubtitle)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -127,7 +127,7 @@ struct SettingsView: View {
             // MARK: Info Section
             Section {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Informazioni", systemImage: "info.circle.fill")
+                    Label(strings.infoSection, systemImage: "info.circle.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(.orange)
                 }
