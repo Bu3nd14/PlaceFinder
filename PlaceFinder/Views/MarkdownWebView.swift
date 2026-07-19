@@ -18,6 +18,11 @@ final class SelfSizingWebView: WKWebView {
     /// `noIntrinsicMetric` to avoid collapsing or ballooning the bubble.
     var contentHeight: CGFloat = 0
 
+    /// Keeps track of the last bounds to avoid invalidating intrinsic content
+    /// size in a tight feedback loop during streaming. Only triggers a relayout
+    /// when bounds genuinely change.
+    private var lastBoundsSize: CGSize = .zero
+
     override var intrinsicContentSize: CGSize {
         guard contentHeight > 0 else {
             return CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
@@ -29,6 +34,8 @@ final class SelfSizingWebView: WKWebView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        guard bounds.size != lastBoundsSize else { return }
+        lastBoundsSize = bounds.size
         invalidateIntrinsicContentSize()
     }
 }
@@ -200,10 +207,6 @@ struct MarkdownWebView: UIViewRepresentable {
         </html>
         """
         webView.loadHTMLString(html, baseURL: nil)
-
-        // Force layout recalculation after content loads.
-        // The webView's navigationDelegate callback will trigger
-        // a follow-up intrinsic size invalidation.
     }
 
     // MARK: - Inline Markdown Processor (shared across methods)
@@ -520,9 +523,6 @@ struct MarkdownWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            // Force layout completion so the DOM is fully resolved
-            webView.layoutIfNeeded()
-
             // Measure true content height via JavaScript — scrollView.contentSize
             // includes viewport insets and is unreliable for bubble sizing.
             webView.evaluateJavaScript("document.documentElement.scrollHeight") { [weak webView] result, _ in
