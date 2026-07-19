@@ -354,7 +354,7 @@ final class OpenWebUIService: ObservableObject {
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         if hasPlaces {
-            // ── Streaming path (concierge with Places) ──
+            // ── Streaming path ──
             let (streamData, response) = try await session.bytes(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse,

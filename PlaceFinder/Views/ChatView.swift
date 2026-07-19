@@ -6,6 +6,7 @@
 
 import SwiftUI
 import UIKit
+import os.log
 
 // MARK: - ChatView
 
@@ -491,22 +492,36 @@ struct ChatView: View {
             }
 
             do {
+                let t0 = CFAbsoluteTimeGetCurrent()
+
                 // 1) Run intent detection to decide whether to call Places
                 // 2) If intent detected, call Places and use concierge streaming prompt
                 let placesContext: String?
+                let t_detect = CFAbsoluteTimeGetCurrent()
                 if let detectedQuery = await service.detectPlaceSearchIntent(userMessage: trimmed) {
+                    let t_detect_end = CFAbsoluteTimeGetCurrent()
+                    os_log("⏱️ detectPlaceSearchIntent: %.2fs", t_detect_end - t_detect)
                     if let result = try? await service.searchNearbyPlaces(category: detectedQuery, transitType: transit) {
                         placesContext = result.markdown
+                        let t_places = CFAbsoluteTimeGetCurrent()
+                        os_log("⏱️ searchNearbyPlaces: %.2fs", t_places - t_detect_end)
                     } else {
                         placesContext = nil
+                        let t_places = CFAbsoluteTimeGetCurrent()
+                        os_log("⏱️ searchNearbyPlaces (failed): %.2fs", t_places - t_detect_end)
                     }
                 } else {
+                    let t_detect_end = CFAbsoluteTimeGetCurrent()
+                    os_log("⏱️ detectPlaceSearchIntent (no match): %.2fs", t_detect_end - t_detect)
                     placesContext = nil
                 }
 
                 // Await GPS fix to guarantee we have coordinates
+                let t_before_gps = CFAbsoluteTimeGetCurrent()
                 let locationContext: OpenWebUIService.LocationContext?
                 if let (lat, lon) = try? await locationManager.fetchCurrentCoordinates() {
+                    let t_gps = CFAbsoluteTimeGetCurrent()
+                    os_log("⏱️ GPS fetch: %.2fs", t_gps - t_before_gps)
                     let formatter = ISO8601DateFormatter()
                     formatter.timeZone = TimeZone.current
                     formatter.formatOptions = [.withInternetDateTime, .withTimeZone]
@@ -516,8 +531,11 @@ struct ChatView: View {
                         timestamp: formatter.string(from: Date())
                     )
                 } else {
+                    let t_gps = CFAbsoluteTimeGetCurrent()
+                    os_log("⏱️ GPS fetch (failed): %.2fs", t_gps - t_before_gps)
                     locationContext = nil
                 }
+                let t_before_llm = CFAbsoluteTimeGetCurrent()
                 let stream = try await service.sendChatCompletion(
                     model: model,
                     messages: messages,
@@ -525,6 +543,8 @@ struct ChatView: View {
                     language: selectedLanguage,
                     locationContext: locationContext
                 )
+                let t_llm_ttfb = CFAbsoluteTimeGetCurrent()
+                os_log("⏱️ LLM concierge TTFB: %.2fs", t_llm_ttfb - t_before_llm)
 
                 let streamTask = Task {
                     var lastUpdate = Date()
@@ -549,6 +569,8 @@ struct ChatView: View {
                 // Wait for the stream to finish; the first to finish determines the outcome
                 _ = await streamTask.result
                 timeoutTask.cancel()
+                let t_end = CFAbsoluteTimeGetCurrent()
+                os_log("⏱️ LLM concierge streaming: %.2fs | TOTAL: %.2fs", t_end - t_llm_ttfb, t_end - t0)
             } catch {
                 if await MainActor.run(body: { isManuallyCancelling }) {
                     // User pressed Stop or Reset — no alert
