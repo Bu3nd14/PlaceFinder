@@ -504,19 +504,20 @@ struct ChatView: View {
                     placesContext = nil
                 }
 
-                // Append location context when coordinates are available
-                let locationContext: OpenWebUIService.LocationContext? = {
-                    guard let lat = locationManager.currentLatitude,
-                          let lon = locationManager.currentLongitude else { return nil }
+                // Await GPS fix to guarantee we have coordinates
+                let locationContext: OpenWebUIService.LocationContext?
+                if let (lat, lon) = try? await locationManager.fetchCurrentCoordinates() {
                     let formatter = ISO8601DateFormatter()
                     formatter.timeZone = TimeZone.current
                     formatter.formatOptions = [.withInternetDateTime, .withTimeZone]
-                    return OpenWebUIService.LocationContext(
+                    locationContext = OpenWebUIService.LocationContext(
                         latitude: lat,
                         longitude: lon,
                         timestamp: formatter.string(from: Date())
                     )
-                }()
+                } else {
+                    locationContext = nil
+                }
                 let stream = try await service.sendChatCompletion(
                     model: model,
                     messages: messages,

@@ -261,7 +261,7 @@ final class OpenWebUIService: ObservableObject {
         // ── Build location context string ──
         let locationInfo: String
         if let ctx = locationContext {
-            locationInfo = "Current time: \(ctx.timestamp). User location: lat \(String(format: "%.6f", ctx.latitude)), lon \(String(format: "%.6f", ctx.longitude))."
+            locationInfo = "You are PlaceFinder, a helpful assistant. The user's current location is lat \(String(format: "%.6f", ctx.latitude)), lon \(String(format: "%.6f", ctx.longitude)). The current date/time is \(ctx.timestamp). Important: use this location and time to answer time- or location-dependent questions (weather, local time, nearby services, etc.) WITHOUT asking the user for their location. If the user's question does not require location, ignore this context."
         } else {
             locationInfo = ""
         }
@@ -292,17 +292,27 @@ final class OpenWebUIService: ObservableObject {
                 "content": strictSystemPrompt
             ])
         } else {
-            // Normal chat: inject location context as system message, then user messages
+            // Normal chat: inject location context directly into the last user message
+            // so the model cannot ignore it
             if !locationInfo.isEmpty {
                 payloadMessages.append([
                     "role": "system",
                     "content": locationInfo
                 ])
             }
-            for msg in messages {
+            for (index, msg) in messages.enumerated() {
+                let isLast = index == messages.count - 1
+                let content: String
+                if isLast && msg.role == .user && !locationInfo.isEmpty {
+                    // Prepend location info to the last user message
+                    let shortInfo = "You are PlaceFinder, a helpful assistant. The user's current location is lat \(String(format: "%.6f", locationContext!.latitude)), lon \(String(format: "%.6f", locationContext!.longitude)). The current date/time is \(locationContext!.timestamp). Important: use this location and time to answer time- or location-dependent questions (weather, local time, nearby services, etc.) WITHOUT asking the user for their location. If the user's question does not require location, ignore this context.\n\nUser message: "
+                    content = shortInfo + msg.content
+                } else {
+                    content = msg.content
+                }
                 payloadMessages.append([
                     "role": msg.role.rawValue,
-                    "content": msg.content
+                    "content": content
                 ])
             }
         }
