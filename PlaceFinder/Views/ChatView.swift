@@ -24,7 +24,7 @@ struct ChatView: View {
         "llama-3.1-70b"
     ]
     @State private var isLoadingModels: Bool = false
-    @State private var selectedModel: String = "deepseek-v4-pro"
+    @State private var selectedModel: String = "gpt-places"
     @State private var selectedTransit: TransitType = .walking
     @State private var selectedLanguage: String = "IT"
 
