@@ -37,13 +37,16 @@ final class AppStrings: ObservableObject {
     // MARK: - SettingsView
 
     var connectionSection: String { language == "EN" ? "Connection" : "Connessione" }
-    var connectionSubtitle: String { language == "EN" ? "OpenWebUI server URL" : "URL del server OpenWebUI" }
+    var connectionSubtitle: String { language == "EN" ? "OpenAI-compatible API base URL and key" : "URL base e chiave API compatibili OpenAI" }
+    var apiBaseURLPlaceholder: String { language == "EN" ? "API Base URL (e.g. https://api.openai.com/v1)" : "URL base API (es. https://api.openai.com/v1)" }
+    var apiKeyPlaceholder: String { language == "EN" ? "API Key" : "Chiave API" }
     var connectButton: String { language == "EN" ? "Connect" : "Connetti" }
     var connectedBadge: String { language == "EN" ? "Connected ✓" : "Connesso ✓" }
-    var loginSuccessPrefix: String { language == "EN" ? "Login successful. Token: " : "Login riuscito. Token: " }
+    var connectionSuccess: String { language == "EN" ? "Connection verified." : "Connessione verificata." }
     var googlePlacesSection: String { language == "EN" ? "Google Places API" : "Google Places API" }
     var googleAPIHint: String { language == "EN" ? "Key to search nearby places" : "Chiave per ricercare luoghi nelle vicinanze" }
     var googleAPIKeyPlaceholder: String { language == "EN" ? "Google API Key" : "Google API Key" }
+    var googleAPIKeyStorageHint: String { language == "EN" ? "The key is stored securely on this device and used for nearby searches." : "La chiave viene salvata in modo sicuro su questo dispositivo e usata per cercare luoghi nelle vicinanze." }
     var infoSection: String { language == "EN" ? "Information" : "Informazioni" }
     var infoText: String {
         language == "EN"
@@ -65,27 +68,18 @@ final class AppStrings: ObservableObject {
             : "Errore sconosciuto nel recupero della posizione."
     }
 
-    // MARK: - OpenWebUIService ServiceError Descriptions
+    // MARK: - AI Service Error Descriptions
 
     var missingBaseURL: String {
         language == "EN" ? "Base URL not configured. Go to Settings." : "Base URL non configurato. Vai nelle Impostazioni."
     }
-    var missingCredentials: String {
-        language == "EN" ? "Email or password not configured. Go to Settings." : "Email o password non configurati. Vai nelle Impostazioni."
-    }
+    var missingAPIKey: String { language == "EN" ? "API key not configured. Go to Settings." : "Chiave API non configurata. Vai nelle Impostazioni." }
     var invalidURL: String { language == "EN" ? "Invalid URL." : "URL non valido." }
-    var loginFailed: String { language == "EN" ? "Login failed. Check your credentials." : "Login fallito. Verifica le credenziali." }
-    var invalidTokenResponse: String {
-        language == "EN" ? "Invalid login response: JWT token missing." : "Risposta di login non valida: token JWT mancante."
-    }
     var missingGoogleAPIKey: String {
         language == "EN" ? "Google Places API Key not configured. Go to Settings." : "Google Places API Key non configurata. Vai nelle Impostazioni."
     }
     var googlePlacesRequestFailed: String {
         language == "EN" ? "Google Places request failed." : "Richiesta a Google Places fallita."
-    }
-    var notAuthenticated: String {
-        language == "EN" ? "Not authenticated. Log in before sending messages." : "Non autenticato. Effettua il login prima di inviare messaggi."
     }
     var chatCompletionFailed: String {
         language == "EN" ? "Chat request failed." : "Richiesta di chat fallita."

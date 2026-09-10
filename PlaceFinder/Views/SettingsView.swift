@@ -11,14 +11,13 @@ struct SettingsView: View {
     @StateObject private var service = OpenWebUIService.shared
     @StateObject private var strings = AppStrings.shared
 
-    @State private var baseURL: String = ""
-    @State private var userEmail: String = ""
-    @State private var userPassword: String = ""
+    @State private var apiBaseURL: String = ""
+    @State private var apiKey: String = ""
     @State private var googleAPIKey: String = ""
-    @State private var isLoggingIn = false
-    @State private var loginStatus: String?
-    @State private var loginSuccess = false
-    @State private var isAuthenticated = false
+    @State private var isConnecting = false
+    @State private var connectionStatus: String?
+    @State private var connectionSuccess = false
+    @State private var isConnected = false
 
     var body: some View {
         Form {
@@ -35,19 +34,16 @@ struct SettingsView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
                 .listRowBackground(Color.clear)
 
-                TextField("Base URL", text: $baseURL)
+                TextField(strings.apiBaseURLPlaceholder, text: $apiBaseURL)
                     .keyboardType(.URL)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
 
-                TextField("Email", text: $userEmail)
-                    .keyboardType(.emailAddress)
+                SecureField(strings.apiKeyPlaceholder, text: $apiKey)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
 
-                SecureField("Password", text: $userPassword)
-
-                if isAuthenticated {
+                if isConnected {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark.shield.fill")
                             .foregroundColor(.green)
@@ -58,10 +54,10 @@ struct SettingsView: View {
                 }
 
                 Button {
-                    Task { await performLogin() }
+                    Task { await verifyConnection() }
                 } label: {
                     HStack {
-                        if isLoggingIn {
+                        if isConnecting {
                             ProgressView()
                                 .scaleEffect(0.8)
                                 .tint(.white)
@@ -81,23 +77,23 @@ struct SettingsView: View {
                     )
                     .foregroundColor(.white)
                 }
-                .disabled(isLoggingIn || baseURL.isEmpty || userEmail.isEmpty || userPassword.isEmpty)
-                .opacity(baseURL.isEmpty || userEmail.isEmpty || userPassword.isEmpty ? 0.5 : 1)
+                .disabled(isConnecting || apiBaseURL.isEmpty || apiKey.isEmpty)
+                .opacity(apiBaseURL.isEmpty || apiKey.isEmpty ? 0.5 : 1)
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 4, trailing: 0))
 
-                if let status = loginStatus {
+                if let status = connectionStatus {
                     HStack(spacing: 6) {
-                        Image(systemName: loginSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundColor(loginSuccess ? .green : .red)
+                        Image(systemName: connectionSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(connectionSuccess ? .green : .red)
                         Text(status)
                             .font(.caption.weight(.medium))
-                            .foregroundColor(loginSuccess ? .green : .red)
+                            .foregroundColor(connectionSuccess ? .green : .red)
                     }
                     .padding(.vertical, 6)
                     .padding(.horizontal, 12)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
-                            .fill((loginSuccess ? Color.green : Color.red).opacity(0.1))
+                            .fill((connectionSuccess ? Color.green : Color.red).opacity(0.1))
                     )
                 }
             }
@@ -119,7 +115,7 @@ struct SettingsView: View {
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
 
-                Text("La chiave viene salvata localmente e usata per cercare luoghi nelle vicinanze.")
+                Text(strings.googleAPIKeyStorageHint)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -156,44 +152,42 @@ struct SettingsView: View {
         .onDisappear {
             saveSettings()
         }
-        .onChange(of: baseURL) { _, _ in saveSettings() }
-        .onChange(of: userEmail) { _, _ in saveSettings() }
-        .onChange(of: userPassword) { _, _ in saveSettings() }
+        .onChange(of: apiBaseURL) { _, _ in saveSettings() }
+        .onChange(of: apiKey) { _, _ in saveSettings() }
         .onChange(of: googleAPIKey) { _, _ in saveSettings() }
     }
 
     private func loadSavedSettings() {
-        baseURL = service.baseURL
-        userEmail = service.userEmail
-        userPassword = service.userPassword
+        apiBaseURL = service.apiBaseURL
+        apiKey = service.apiKey
         googleAPIKey = service.googleAPIKey
-        isAuthenticated = service.isLoggedIn
+        isConnected = service.isConnected
     }
 
     private func saveSettings() {
-        service.baseURL = baseURL
-        service.userEmail = userEmail
-        service.userPassword = userPassword
+        service.apiBaseURL = apiBaseURL
+        service.apiKey = apiKey
         service.googleAPIKey = googleAPIKey
     }
 
-    private func performLogin() async {
-        isLoggingIn = true
-        loginStatus = nil
-        loginSuccess = false
+    private func verifyConnection() async {
+        isConnecting = true
+        connectionStatus = nil
+        connectionSuccess = false
+        saveSettings()
 
         do {
-            let token = try await service.loginToServer()
-            loginStatus = strings.loginSuccessPrefix + String(token.prefix(20)) + "..."
-            loginSuccess = true
-            isAuthenticated = true
+            try await service.verifyConnection()
+            connectionStatus = strings.connectionSuccess
+            connectionSuccess = true
+            isConnected = true
         } catch {
-            loginStatus = error.localizedDescription
-            loginSuccess = false
-            isAuthenticated = false
+            connectionStatus = error.localizedDescription
+            connectionSuccess = false
+            isConnected = false
         }
 
-        isLoggingIn = false
+        isConnecting = false
     }
 
     private func dismissKeyboard() {

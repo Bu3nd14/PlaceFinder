@@ -7,11 +7,13 @@
 
 import Foundation
 import Combine
+import Security
 
 final class OpenWebUIService: ObservableObject {
     static let shared = OpenWebUIService()
+    private static let defaultAPIBaseURL = "https://api.openai.com/v1"
 
-    @Published var isLoggedIn: Bool = false
+    @Published var isConnected: Bool = false
 
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -20,85 +22,51 @@ final class OpenWebUIService: ObservableObject {
         return URLSession(configuration: config)
     }()
 
-    // MARK: - Secure Storage Keys
+    // MARK: - Settings Keys
 
     private enum Keys {
-        static let baseURL = "com.placefinder.baseURL"
-        static let userEmail = "com.placefinder.userEmail"
-        static let userPassword = "com.placefinder.userPassword"
+        static let apiBaseURL = "com.placefinder.apiBaseURL"
+        static let apiKey = "com.placefinder.apiKey"
         static let googleAPIKey = "com.placefinder.googleAPIKey"
-        static let jwtToken = "com.placefinder.jwtToken"
     }
 
     // MARK: - Settings Persistence
 
-    var baseURL: String {
-        get { UserDefaults.standard.string(forKey: Keys.baseURL) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Keys.baseURL) }
+    var apiBaseURL: String {
+        get {
+            let savedURL = UserDefaults.standard.string(forKey: Keys.apiBaseURL) ?? ""
+            return savedURL.isEmpty ? Self.defaultAPIBaseURL : savedURL
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.apiBaseURL) }
     }
 
-    var userEmail: String {
-        get { UserDefaults.standard.string(forKey: Keys.userEmail) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Keys.userEmail) }
-    }
-
-    var userPassword: String {
-        get { UserDefaults.standard.string(forKey: Keys.userPassword) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Keys.userPassword) }
+    var apiKey: String {
+        get { SecureStorage.string(forKey: Keys.apiKey) ?? "" }
+        set { SecureStorage.set(newValue, forKey: Keys.apiKey) }
     }
 
     var googleAPIKey: String {
-        get { UserDefaults.standard.string(forKey: Keys.googleAPIKey) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Keys.googleAPIKey) }
+        get {
+            if let apiKey = SecureStorage.string(forKey: Keys.googleAPIKey) {
+                return apiKey
+            }
+
+            // Move the previously persisted Google key out of UserDefaults.
+            let legacyKey = UserDefaults.standard.string(forKey: Keys.googleAPIKey) ?? ""
+            guard !legacyKey.isEmpty else { return "" }
+            SecureStorage.set(legacyKey, forKey: Keys.googleAPIKey)
+            UserDefaults.standard.removeObject(forKey: Keys.googleAPIKey)
+            return legacyKey
+        }
+        set { SecureStorage.set(newValue, forKey: Keys.googleAPIKey) }
     }
 
-    private var jwtToken: String? {
-        get { UserDefaults.standard.string(forKey: Keys.jwtToken) }
-        set { UserDefaults.standard.set(newValue, forKey: Keys.jwtToken) }
-    }
+    // MARK: - API Connection
 
-    // MARK: - JWT Authentication
-
-    /// Logs into the server and caches the JWT token securely.
-    /// - Returns: The JWT token string.
-    func loginToServer() async throws -> String {
-        guard !baseURL.isEmpty else {
-            throw ServiceError.missingBaseURL
-        }
-        guard !userEmail.isEmpty, !userPassword.isEmpty else {
-            throw ServiceError.missingCredentials
-        }
-
-        let urlString = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/v1/auths/signin"
-        guard let url = URL(string: urlString) else {
-            throw ServiceError.invalidURL
-        }
-
-        let body: [String: String] = [
-            "email": userEmail,
-            "password": userPassword
-        ]
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            throw ServiceError.loginFailed
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = json["token"] as? String else {
-            throw ServiceError.invalidTokenResponse
-        }
-
-        jwtToken = token
-        isLoggedIn = true
-        return token
+    /// Verifies an OpenAI-compatible endpoint and API key by listing models.
+    func verifyConnection() async throws {
+        _ = try await fetchAvailableModels()
+        isConnected = true
     }
 
     // MARK: - Google Places Nearby Search
@@ -138,7 +106,7 @@ final class OpenWebUIService: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
-        request.setValue("places.id,places.displayName,places.formattedAddress,places.rating", forHTTPHeaderField: "X-Goog-FieldMask")
+        request.setValue("places.id,places.displayName,places.formattedAddress,places.rating,places.name", forHTTPHeaderField: "X-Goog-FieldMask")
         request.setValue("RC.PlaceFinder", forHTTPHeaderField: "X-Ios-Bundle-Identifier")
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
@@ -193,18 +161,17 @@ final class OpenWebUIService: ObservableObject {
 
     // MARK: - Available Models
 
-    /// Fetches the list of available model IDs from the LiteLLM proxy's `/api/models`
-    /// endpoint. Returns model IDs sorted alphabetically for the Picker dropdown.
+    /// Fetches model IDs from an OpenAI-compatible `/models` endpoint.
     func fetchAvailableModels() async throws -> [String] {
-        guard !baseURL.isEmpty else { throw ServiceError.missingBaseURL }
-        guard let token = jwtToken else { throw ServiceError.notAuthenticated }
+        guard !apiBaseURL.isEmpty else { throw ServiceError.missingBaseURL }
+        guard !apiKey.isEmpty else { throw ServiceError.missingAPIKey }
 
-        let urlString = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/models"
+        let urlString = apiBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/models"
         guard let url = URL(string: urlString) else { throw ServiceError.invalidURL }
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
@@ -235,8 +202,7 @@ final class OpenWebUIService: ObservableObject {
     /// that instructs the LLM to select and describe ONLY the top 5 venues from
     /// the real Google data, with clickable Google Maps links. Streaming is used.
     ///
-    /// Without `googlePlacesContext`, this falls back to normal non-streaming chat
-    /// with web search tools available.
+    /// Without `googlePlacesContext`, this falls back to a normal non-streaming chat.
     ///
     /// `locationContext` is injected as a system message so the LLM always knows
     /// the user's current position and time.
@@ -247,14 +213,12 @@ final class OpenWebUIService: ObservableObject {
         language: String? = nil,
         locationContext: LocationContext? = nil
     ) async throws -> AsyncThrowingStream<String, Error> {
-        guard let token = jwtToken else {
-            throw ServiceError.notAuthenticated
-        }
-        guard !baseURL.isEmpty else {
+        guard !apiBaseURL.isEmpty else {
             throw ServiceError.missingBaseURL
         }
+        guard !apiKey.isEmpty else { throw ServiceError.missingAPIKey }
 
-        let urlString = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/chat/completions"
+        let urlString = apiBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/chat/completions"
         guard let url = URL(string: urlString) else {
             throw ServiceError.invalidURL
         }
@@ -321,40 +285,16 @@ final class OpenWebUIService: ObservableObject {
             }
         }
 
-        var payload: [String: Any] = [
+        let payload: [String: Any] = [
             "model": model,
             "messages": payloadMessages,
             "stream": hasPlaces
         ]
 
-        // For normal chat (non-streaming), inject web search tool definition
-        if !hasPlaces {
-            payload["tools"] = [
-                [
-                    "type": "function",
-                    "function": [
-                        "name": "litellm_web_search",
-                        "description": "Search the web for real-time information",
-                        "parameters": [
-                            "type": "object",
-                            "properties": [
-                                "query": [
-                                    "type": "string",
-                                    "description": "Search query"
-                                ]
-                            ],
-                            "required": ["query"]
-                        ]
-                    ]
-                ]
-            ]
-            payload["tool_choice"] = "auto"
-        }
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         if hasPlaces {
@@ -392,7 +332,7 @@ final class OpenWebUIService: ObservableObject {
                 }
             }
         } else {
-            // ── Non-streaming path (normal chat with web search tools) ──
+            // ── Non-streaming path (normal chat) ──
             let (data, response) = try await session.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse,
@@ -415,10 +355,10 @@ final class OpenWebUIService: ObservableObject {
 
     /// Queries the LLM to determine whether the user's message is asking to find/search
     /// for places/venues/locations. Returns the extracted search query if YES, nil if NO.
-    func detectPlaceSearchIntent(userMessage: String) async -> String? {
-        guard let token = jwtToken, !baseURL.isEmpty else { return nil }
+    func detectPlaceSearchIntent(userMessage: String, model: String) async -> String? {
+        guard !apiKey.isEmpty, !apiBaseURL.isEmpty else { return nil }
 
-        let urlString = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/chat/completions"
+        let urlString = apiBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/chat/completions"
         guard let url = URL(string: urlString) else { return nil }
 
         let detectionPrompt = """
@@ -444,7 +384,7 @@ final class OpenWebUIService: ObservableObject {
         ]
 
         let payload: [String: Any] = [
-            "model": "deepseek-v4-pro",
+            "model": model,
             "messages": messages,
             "stream": false
         ]
@@ -452,7 +392,7 @@ final class OpenWebUIService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         do {
@@ -487,6 +427,41 @@ final class OpenWebUIService: ObservableObject {
     }
 }
 
+private enum SecureStorage {
+    static func string(forKey key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func set(_ value: String, forKey key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
+
+        guard !value.isEmpty else { return }
+        let attributes: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        SecItemAdd(attributes as CFDictionary, nil)
+    }
+}
+
 // MARK: - Supporting Types
 
 struct ChatMessage: Identifiable, Codable {
@@ -515,13 +490,10 @@ struct PlacesSearchResult {
 
 enum ServiceError: LocalizedError {
     case missingBaseURL
-    case missingCredentials
     case invalidURL
-    case loginFailed
-    case invalidTokenResponse
+    case missingAPIKey
     case missingGoogleAPIKey
     case googlePlacesRequestFailed
-    case notAuthenticated
     case chatCompletionFailed
 
     var errorDescription: String? {
@@ -529,20 +501,14 @@ enum ServiceError: LocalizedError {
         switch self {
         case .missingBaseURL:
             return s.missingBaseURL
-        case .missingCredentials:
-            return s.missingCredentials
         case .invalidURL:
             return s.invalidURL
-        case .loginFailed:
-            return s.loginFailed
-        case .invalidTokenResponse:
-            return s.invalidTokenResponse
+        case .missingAPIKey:
+            return s.missingAPIKey
         case .missingGoogleAPIKey:
             return s.missingGoogleAPIKey
         case .googlePlacesRequestFailed:
             return s.googlePlacesRequestFailed
-        case .notAuthenticated:
-            return s.notAuthenticated
         case .chatCompletionFailed:
             return s.chatCompletionFailed
         }

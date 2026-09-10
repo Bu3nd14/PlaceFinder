@@ -500,7 +500,7 @@ struct ChatView: View {
                 // 2) If intent detected, call Places and use concierge streaming prompt
                 let placesContext: String?
                 let t_detect = CFAbsoluteTimeGetCurrent()
-                if let detectedQuery = await service.detectPlaceSearchIntent(userMessage: trimmed) {
+                if let detectedQuery = await service.detectPlaceSearchIntent(userMessage: trimmed, model: model) {
                     let t_detect_end = CFAbsoluteTimeGetCurrent()
                     os_log("⏱️ detectPlaceSearchIntent: %.2fs", t_detect_end - t_detect)
                     if let result = try? await service.searchNearbyPlaces(category: detectedQuery, transitType: transit) {
